@@ -1,0 +1,11 @@
+import org.apache.spark.sql.types.*;
+
+StructType schema = new StructType()
+    .add("log_type", DataTypes.StringType)
+    .add("dnsentityname", DataTypes.StringType)
+    .add("customer", DataTypes.StringType)
+    .add("department", DataTypes.StringType)
+    .add("details_metal_applicationname", DataTypes.StringType)
+    .add("details_metal_classname", DataTypes.StringType)
+    .add("details_metal_eventname", DataTypes.StringType)
+    .add("details_metal_eventtype", DataTypes.IntegerType);
