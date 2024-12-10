@@ -1,0 +1,38 @@
+import org.apache.spark.sql.functions._
+
+val baseHdfsPath: String = "/edl/hdfs/jffv-mns/consumption/test/ettede"
+
+// The file to compare
+val srcFilePath: String = s"${baseHdfsPath}/Versa_Devices_ESP_12102024.csv"
+// File against which we have to compare the source file
+val baseFilePath: String = s"${baseHdfsPath}/AID_Inventory_All_Devices120624.csv"
+
+// Output paths
+val outputPathMissingSrcRecords: String = s"${baseHdfsPath}/output/comparison/missing_src_records"
+val outputPathMissingBaseRecords: String = s"${baseHdfsPath}/output/comparison/missing_base_records"
+val outputPathFilteredBaseFile: String = s"${baseHdfsPath}/output/filtered_base_file"
+
+// Load source and base files
+val srcDF = spark.read.option("header", "true").csv(srcFilePath)
+val baseDF = spark.read.option("header", "true").csv(baseFilePath)
+
+// Apply filtering to include only rows with `e_dns_entity_name` containing "kone" in `baseDF`
+val filteredBaseDF = baseDF.filter(col("e_dns_entity_name").contains("kone"))
+
+// (Optional) Save the filtered base DataFrame for validation
+filteredBaseDF.coalesce(1).write.mode("overwrite").option("header", "true").csv(outputPathFilteredBaseFile)
+
+// Compare all columns
+// Records in srcDF that do not exist in filteredBaseDF
+val recordsMissingInSrcDF = srcDF.select("e_dns_entity_name", "e_gch_id", "e_ban", "e_pq_location_id")
+  .except(filteredBaseDF.select("e_dns_entity_name", "e_gch_id", "e_ban", "e_pq_location_id"))
+
+// Save the records missing in the base file
+recordsMissingInSrcDF.coalesce(1).write.mode("overwrite").option("header", "true").csv(outputPathMissingSrcRecords)
+
+// Records in filteredBaseDF that do not exist in srcDF
+val recordsMissingInBaseDF = filteredBaseDF.select("e_dns_entity_name", "e_gch_id", "e_ban", "e_pq_location_id")
+  .except(srcDF.select("e_dns_entity_name", "e_gch_id", "e_ban", "e_pq_location_id"))
+
+// Save the records missing in the source file
+recordsMissingInBaseDF.coalesce(1).write.mode("overwrite").option("header", "true").csv(outputPathMissingBaseRecords)
