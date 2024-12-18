@@ -1,0 +1,35 @@
+<build>
+    <plugins>
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-shade-plugin</artifactId>
+            <version>3.4.1</version>
+            <executions>
+                <execution>
+                    <phase>package</phase>
+                    <goals>
+                        <goal>shade</goal>
+                    </goals>
+                    <configuration>
+                        <artifactSet>
+                            <includes>
+                                <!-- Include only the Neo4j driver -->
+                                <include>org.neo4j.driver:neo4j-java-driver</include>
+                            </includes>
+                        </artifactSet>
+                        <filters>
+                            <filter>
+                                <!-- Exclude all project classes -->
+                                <artifact>*:*</artifact>
+                                <excludes>
+                                    <exclude>**/*</exclude>
+                                </excludes>
+                            </filter>
+                        </filters>
+                        <outputFile>target/neo4j-driver.jar</outputFile>
+                    </configuration>
+                </execution>
+            </executions>
+        </plugin>
+    </plugins>
+</build>
