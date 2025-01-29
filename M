@@ -1,0 +1,71 @@
+import org.apache.spark.sql.Dataset;
+import org.apache.spark.sql.Row;
+import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.functions;
+import org.apache.spark.sql.streaming.StreamingQuery;
+import org.apache.spark.sql.streaming.StreamingQueryException;
+import org.apache.spark.sql.types.StructType;
+import org.apache.spark.sql.types.DataTypes;
+
+import java.util.Arrays;
+import java.util.List;
+
+public class KafkaSparkDynamicMasking {
+    public static void main(String[] args) throws StreamingQueryException {
+        // Define fields to hash
+        List<String> fieldsToMask = Arrays.asList("email", "ssn", "phone"); // Add more fields as needed
+
+        // HDFS output and checkpoint paths
+        String hdfsOutputPath = "hdfs://namenode:9000/user/data/output";
+        String checkpointPath = "hdfs://namenode:9000/user/data/checkpoint";
+
+        // Initialize SparkSession
+        SparkSession spark = SparkSession.builder()
+                .appName("KafkaDynamicMasking")
+                .master("local[*]") // Use "yarn" or a cluster in production
+                .getOrCreate();
+
+        // Read Kafka messages
+        Dataset<Row> kafkaStream = spark
+                .readStream()
+                .format("kafka")
+                .option("kafka.bootstrap.servers", "broker1:9092,broker2:9092") // Replace with your Kafka brokers
+                .option("subscribe", "your_topic_name") // Replace with Kafka topic name
+                .option("startingOffsets", "latest") // Start from latest offset
+                .load();
+
+        // Parse Kafka value as JSON string
+        Dataset<Row> jsonData = kafkaStream.selectExpr("CAST(value AS STRING) as json_str");
+
+        // Infer schema dynamically by reading JSON payload
+        Dataset<Row> parsedData = jsonData.select(functions.from_json(
+                functions.col("json_str"),
+                DataTypes.createMapType(DataTypes.StringType, DataTypes.StringType)
+        ).alias("data"));
+
+        // Flatten the JSON structure into individual columns
+        Dataset<Row> flattenedData = parsedData.selectExpr("data.*");
+
+        // Mask specified fields dynamically
+        for (String field : fieldsToMask) {
+            if (flattenedData.columns().length > 0 && Arrays.asList(flattenedData.columns()).contains(field)) {
+                flattenedData = flattenedData.withColumn(
+                        field, // Replace the column with its hashed version
+                        functions.sha2(functions.col(field), 256)
+                );
+            }
+        }
+
+        // Write the transformed data to HDFS
+        StreamingQuery query = flattenedData.writeStream()
+                .format("parquet") // Use Parquet for efficient storage; JSON or CSV can also be used
+                .outputMode("append")
+                .option("path", hdfsOutputPath) // Path to write data
+                .option("checkpointLocation", checkpointPath) // Checkpoint directory
+                .trigger(org.apache.spark.sql.streaming.Trigger.ProcessingTime("1 minute"))
+                .start();
+
+        // Await query termination
+        query.awaitTermination();
+    }
+}
