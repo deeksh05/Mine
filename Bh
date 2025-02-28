@@ -1,0 +1,36 @@
+WITH TestTagMapping AS (
+    SELECT 
+        t.testId,
+        t.dnsEntityName,
+        t.interval,  -- Required column
+        m.name AS metric_name,
+        m.description AS metric_description,
+        m.startTimeUnixNano,
+        m.timeUnixNano,
+        m.asDouble AS metric_value,
+        tg.key AS tag_key,
+        tg.value AS tag_value
+    FROM thousandeyes_tests t
+    LEFT JOIN thousandeyes_tags tg 
+        ON t.testId = tg.aid  -- Assuming aid in tags corresponds to testId
+    LEFT JOIN thousandeyes_metrics m 
+        ON t.testId = m.testId  -- Join with metrics table to get required columns
+)
+SELECT 
+    tt.testId,
+    tt.dnsEntityName,
+    tt.interval,  -- Ensuring required column is included
+    tt.metric_name,
+    tt.metric_description,
+    tt.startTimeUnixNano,
+    tt.timeUnixNano,
+    tt.metric_value,
+    CASE 
+        WHEN tt.tag_key = 'MC-MSTeams' THEN 'Microsoft Teams'
+        WHEN tt.tag_key LIKE 'AWS%' THEN 'AWS Cloud'
+        WHEN tt.tag_key LIKE 'Office%' THEN 'Corporate Office'
+        ELSE 'Unknown'
+    END AS SiteName,
+    tt.tag_key AS TagKey,
+    tt.tag_value AS TagValue
+FROM TestTagMapping tt;
