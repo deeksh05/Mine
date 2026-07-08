@@ -1,0 +1,35 @@
+I have a BigQuery SQL SCD2 implementation with flow:
+
+RAW → INTAKE → STAGING → TARGET
+
+I already updated my STAGING query. The staging table builds data from intake, joins lookup tables, and creates ACTN_TYP_CD using comparison with the existing target/stage history.
+
+Current staging change:
+- ACTN_TYP_CD is derived using EVENT_ID:
+  If EVENT_ID exists already → 'U'
+  Else → 'I'
+
+Now review and modify my TARGET table load query.
+
+Requirements:
+1. TARGET table is SCD Type 2.
+2. Do not calculate ACTN_TYP_CD again in target.
+3. Target should consume ACTN_TYP_CD from staging.
+4. For ACTN_TYP_CD = 'U':
+   - Find the existing current target record using EVENT_ID
+   - Update existing row:
+        CURR_IND = 'N'
+        REC_EXPRN_DT = CURRENT_DATE - 1
+5. Do NOT compare using MBR_ACCT_FULL_ID anymore.
+   Replace that matching logic with EVENT_ID.
+6. For ACTN_TYP_CD IN ('I','U'):
+   - Insert a new record into target
+   - Set CURR_IND = 'Y'
+   - Set REC_EFF_DT = CURRENT_DATE
+   - Set REC_EXPRN_DT = '2999-12-31'
+7. Ensure EVENT_ID is included in insert column list and select list.
+8. Keep surrogate key generation logic unchanged.
+9. Keep all existing columns, joins, and formatting style unchanged.
+10. Only make the minimum changes needed for proper SCD2 logic.
+
+Return the corrected BigQuery SQL and highlight exactly what changed.
