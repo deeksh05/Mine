@@ -1,0 +1,93 @@
+Please fix my BigQuery TARGET SQL for T_RXBNFT_CAREMARK_PA based on Krishna’s latest review comments.
+
+ETL flow:
+RAW → INTAKE → STAGING → TARGET
+
+The staging table S_RXBNFT_CAREMARK_PA already contains:
+- Final transformed data
+- MBR_ACCT_GID
+- LVL1_ACCT_GID
+- LVL3_ACCT_GID
+- ACTN_TYP_CD ('I' or 'U')
+
+Target should only perform SCD Type 2 processing.
+
+Required changes:
+
+1. Do NOT calculate ACTN_TYP_CD in target.
+   - ACTN_TYP_CD is already derived in staging.
+   - Target should only consume S.ACTN_TYP_CD.
+
+2. Update/expire existing records only for ACTN_TYP_CD = 'U'.
+
+Update logic:
+- Join target with staging using EVENT_ID.
+- Do NOT use MBR_ACCT_FULL_ID because it is not unique.
+- Use only current target records:
+    T.CURR_IND = 'Y'
+
+Expected update:
+
+UPDATE target
+SET
+    CURR_IND = 'N',
+    REC_EXPRN_DT = CURRENT_DATE - 1
+WHERE
+    T.EVENT_ID = S.EVENT_ID
+    AND T.CURR_IND = 'Y'
+    AND S.ACTN_TYP_CD = 'U';
+
+3. Insert logic:
+Insert records from staging where:
+
+S.ACTN_TYP_CD IN ('I','U')
+
+Reason:
+- I = brand new record
+- U = new version after expiring previous current record
+
+4. Change REC_EFF_DT logic during insert.
+
+Use:
+CASE
+ WHEN S.ACTN_TYP_CD = 'I'
+ THEN S.PA_EFFECTIVE_DATE
+
+ WHEN S.ACTN_TYP_CD = 'U'
+ THEN CURRENT_DATE()
+
+END AS REC_EFF_DT
+
+Reason:
+- First-time insert can contain historical PA data, so use PA effective date.
+- Update records represent a new version starting today.
+
+5. Inserted records should have:
+
+CURR_IND = 'Y'
+REC_EXPRN_DT = DATE '9999-12-31'
+
+6. Keep existing surrogate key generation logic unchanged.
+
+7. Preserve:
+- existing column order
+- existing parameters
+- existing table names
+- existing audit columns
+
+8. Add a post-update process after insert:
+
+Purpose:
+Some records may initially load with:
+MBR_ACCT_GID = -2
+LVL1_ACCT_GID = -2
+LVL3_ACCT_GID = -2
+
+because reference data was not available during the first load.
+
+Add logic to refresh these later:
+- Update missing MBR_ACCT_GID by joining T_MBR_ACCT_MK using MBR_ACCT_FULL_ID and SRC_CD='X'.
+- Update missing client/account GIDs by joining T_CLNT_ACCT where CLNT_ACCT_TYP_CD='3'.
+
+9. Return the full corrected BigQuery SQL.
+10. Briefly list all modifications made.
