@@ -1,0 +1,62 @@
+Please fix my BigQuery STAGING SQL for S_RXBNFT_CAREMARK_PA based on Krishna’s latest review comments.
+
+ETL flow:
+RAW → INTAKE → STAGING → TARGET
+
+This SQL is only for the STAGING layer.
+
+Required changes:
+
+1. Keep Step 1 as VOL_RXBNFT_STAGE_BUILD:
+   - Read from I_RXBNFT_CAREMARK_PA.
+   - Hardcode SRC_CD as 'X'.
+   - Apply ICD decimal/period formatting.
+   - Build MBR_ACCT_FULL_ID using carrier/account/group/member_id.
+   - Do not derive ACTN_TYP_CD here.
+   - Do not join target here.
+
+2. Do NOT use T_CLNT_ACCT_DENORM anymore.
+   Replace it with T_CLNT_ACCT.
+
+3. For client lookup:
+   - Create VOL_RXBNFT_CLNT_LKP after VOL_RXBNFT_STAGE_BUILD.
+   - Use T_CLNT_ACCT.
+   - Filter SRC_CD = 'X'.
+   - Filter CLNT_ACCT_TYP_CD = '3'.
+   - Only pull client/account rows needed for records present in VOL_RXBNFT_STAGE_BUILD.
+   - Get LVL1_ACCT_GID and LVL3_ACCT_GID as needed.
+
+4. For member lookup:
+   - Create VOL_RXBNFT_MBR_LKP after VOL_RXBNFT_STAGE_BUILD.
+   - Use T_MBR_ACCT_MK only as lookup.
+   - Do not insert into T_MBR_ACCT_MK.
+   - Filter SRC_CD = 'X'.
+   - Only pull MBR_ACCT_FULL_ID values present in VOL_RXBNFT_STAGE_BUILD.
+
+5. Create an intermediate volatile/temp table, for example VOL_RXBNFT_WITH_GIDS:
+   - Select from VOL_RXBNFT_STAGE_BUILD.
+   - Left join VOL_RXBNFT_MBR_LKP.
+   - Left join VOL_RXBNFT_CLNT_LKP.
+   - Populate:
+       MBR_ACCT_GID
+       LVL1_ACCT_GID
+       LVL3_ACCT_GID
+   - Use COALESCE(GID, -2) when lookup is missing.
+   - Do NOT derive ACTN_TYP_CD in this table.
+
+6. Final insert into S_RXBNFT_CAREMARK_PA:
+   - Select from VOL_RXBNFT_WITH_GIDS.
+   - Left join target table T_RXBNFT_CAREMARK_PA.
+   - Join target using:
+       target.EVENT_ID = v.EVENT_ID
+       AND target.CURR_IND = 'Y'
+   - Derive ACTN_TYP_CD here:
+       If target EVENT_ID exists → 'U'
+       Else → 'I'
+
+7. Do not use MBR_ACCT_FULL_ID to derive ACTN_TYP_CD.
+8. Do not compare with staging table to derive ACTN_TYP_CD.
+9. Preserve existing insert column order and existing business columns.
+10. Preserve existing parameterized table names.
+11. Return the full corrected BigQuery SQL.
+12. Also list the changes made briefly.
