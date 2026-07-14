@@ -1,0 +1,234 @@
+Please modify this existing pharmacy claim SQL to add RX Benefit PA-based ICD resolution before the current normal claim-resolution logic.
+
+Important context:
+
+1. This is NOT the S_RXBNFT_CAREMARK_PA staging load and NOT the T_RXBNFT_CAREMARK_PA SCD2 load.
+2. T_RXBNFT_CAREMARK_PA is only a reference/lookup source in this change.
+3. The destination remains the existing claim working table, VOL_CLM_PA.
+4. Preserve the existing VOL_CLM_PA insert column list and column order exactly.
+5. Reuse the existing daily claim table and unresolved-status table already present in the SQL.
+6. Do not add RX Benefit model-only fields to VOL_CLM_PA unless those columns already exist there.
+7. Place the new RX Benefit logic before the existing normal claim-resolution passes, around the area before the current first normal pass at approximately line 497.
+
+Existing objects likely used:
+
+- VOL_RXC_PHMCY_CLM: full daily pharmacy claim working table
+- VOL_CLM_TYP: narrow claim-status table
+- VOL_CLM_PA: output/working PA claim table
+- T_RXBNFT_CAREMARK_PA: RX Benefit PA SCD2 target/reference table
+- Drug lookup tables already used in the current SQL
+- Member account lookup table containing EPH_LINK_ID, already used elsewhere in the current program
+
+RX Benefit PA fields available:
+
+- PA_NUMBER
+- MBR_ACCT_GID
+- DRUG_ID
+- PRIMARY_ICD_CODE
+- PA_EFFECTIVE_DATE
+- PA_EXPIRATION_DATE
+- REC_EFF_DT
+- REC_EXPRN_DT
+- CURR_IND
+- EVENT_ID
+- LVL1_ACCT_GID
+- LVL3_ACCT_GID
+
+Do not assume all these fields belong in VOL_CLM_PA. Use them only for matching and deriving values.
+
+Overall requirement:
+
+Add three RX Benefit resolution passes in each relevant reporting iteration.
+
+Every pass must:
+
+1. Start from VOL_RXC_PHMCY_CLM.
+2. Join VOL_CLM_TYP using the existing claim identity columns, likely:
+   - CLM_EVNT_GID
+   - MBR_ACCT_GID
+   - FILL_DT
+3. Include only unresolved claims:
+   CT1.RSLVD_STUS = 'N'
+4. Insert resolved rows into VOL_CLM_PA using the exact existing VOL_CLM_PA column structure.
+5. Use RXB.PRIMARY_ICD_CODE as the derived ICD code.
+6. After each pass, update VOL_CLM_TYP to RSLVD_STUS = 'Y' only for claims resolved by that pass.
+7. Ensure later passes process only records still unresolved.
+8. Preserve the existing error-handling style and logging/statistics calls used in this program.
+
+PASS 1 — PA number + member + date
+
+Add a new insert into VOL_CLM_PA using the strongest match.
+
+Join T_RXBNFT_CAREMARK_PA RXB using:
+
+- TRIM(RXB.PA_NUMBER) = TRIM(CLM.MBR_PRIOR_ATHZN_NBR)
+- RXB.MBR_ACCT_GID = CLM.MBR_ACCT_GID
+- CLM.FILL_DT BETWEEN RXB.PA_EFFECTIVE_DATE AND RXB.PA_EXPIRATION_DATE
+- CLM.FILL_DT BETWEEN RXB.REC_EFF_DT AND RXB.REC_EXPRN_DT
+
+The second date condition is required because T_RXBNFT_CAREMARK_PA is SCD Type 2 and the correct historical version must be selected for the claim fill date.
+
+Do not match on PA number alone because PA number may not be globally unique.
+
+Populate RX Benefit-derived fields as follows, only where corresponding VOL_CLM_PA columns already exist:
+
+- RXB.PA_NUMBER AS RXCLM_OVRD_NBR
+- RXB.PA_NUMBER AS CASE_ID, unless the existing code has a better CASE_ID source
+- 'RXB' AS SRS_SYS_NM
+- RXB.PRIMARY_ICD_CODE AS DRVD_ICD_CD
+- Use a unique step/pass code such as '00A' if that is consistent with the program’s tracking convention
+
+For all other output fields, copy the expressions from the existing VOL_CLM_PA insert/select block. Most should continue coming from CLM.
+
+After Pass 1, update VOL_CLM_TYP:
+
+- Set RSLVD_STUS = 'Y'
+- Only for claims inserted by the RXB Pass 1 block
+- Match using the same claim identity columns used by the existing process
+- Keep all other unresolved rows as 'N'
+
+PASS 2 — Member + drug + date
+
+Process only claims still unresolved.
+
+Do not use the PA-number join in this pass.
+
+Match using:
+
+- RXB.MBR_ACCT_GID = CLM.MBR_ACCT_GID
+- The RX Benefit drug identifier resolved to the same DRUG_PROD_GID as the claim
+- CLM.FILL_DT BETWEEN RXB.PA_EFFECTIVE_DATE AND RXB.PA_EXPIRATION_DATE
+- CLM.FILL_DT BETWEEN RXB.REC_EFF_DT AND RXB.REC_EXPRN_DT
+
+RXB.DRUG_ID may contain either NDC or GPI.
+
+Use the existing project-standard drug lookup logic already present in the SQL:
+
+- For NDC, join RXB.DRUG_ID to the appropriate drug/NDC reference field to obtain DRUG_PROD_GID
+- For GPI, join through the appropriate GPI lookup to obtain DRUG_PROD_GID
+- Then match the resolved DRUG_PROD_GID to CLM.DRUG_PROD_GID
+
+Do not invent new drug mappings if an existing pattern already exists in the file. Reuse the same drug reference tables and join conventions used by the current claim logic.
+
+Populate:
+
+- RXB.PRIMARY_ICD_CODE AS DRVD_ICD_CD
+- 'RXB' AS SRS_SYS_NM
+- Use a distinct pass code such as '00B'
+
+After Pass 2, mark only claims resolved by this pass as RSLVD_STUS = 'Y'.
+
+PASS 3 — EPH link + drug + date
+
+Process only claims still unresolved.
+
+This pass handles the same person having a different MBR_ACCT_GID because of account/group changes.
+
+Resolve the RX Benefit member’s EPH_LINK_ID using the existing member account reference source already present in the program.
+
+Then match:
+
+- RXB-side EPH_LINK_ID = CLM.EPH_LINK_ID
+- Resolved RXB drug product GID = CLM.DRUG_PROD_GID
+- CLM.FILL_DT BETWEEN RXB.PA_EFFECTIVE_DATE AND RXB.PA_EXPIRATION_DATE
+- CLM.FILL_DT BETWEEN RXB.REC_EFF_DT AND RXB.REC_EXPRN_DT
+
+Do not match on MBR_ACCT_GID in this pass.
+
+Populate:
+
+- RXB.PRIMARY_ICD_CODE AS DRVD_ICD_CD
+- 'RXB' AS SRS_SYS_NM
+- Use a distinct pass code such as '00C'
+
+After Pass 3, mark only claims resolved by this pass as RSLVD_STUS = 'Y'.
+
+Duplicate handling:
+
+For every pass, prevent multiple candidate PA rows from producing duplicate claim outputs.
+
+Follow the existing program pattern using QUALIFY ROW_NUMBER().
+
+Partition by the claim identity, at minimum:
+
+- CLM_EVNT_GID
+- MBR_ACCT_GID
+- FILL_DT
+
+Order by the most appropriate PA candidate, preferably:
+
+- PA effective date descending, or
+- SCD record effective date descending, or
+- another existing deterministic project-standard priority
+
+Keep only row number 1.
+
+Second iteration:
+
+The SQL has another reporting iteration later in the program, around line 2247/2447.
+
+Repeat the same three RX Benefit passes there.
+
+Use the existing second-iteration VOL_CLM_PA insert/select block as the template.
+
+Preserve all second-iteration-specific:
+
+- case expressions
+- filters
+- joins
+- ICD reference joins
+- ranking logic
+- output columns
+
+Only add the RX Benefit matching logic and derived values.
+
+There is an important ICD reference join in the second iteration, similar to:
+
+INNER JOIN <ICD reference table> REF
+  ON X.DRVD_ICD_CD = REF.ICD_CD
+
+Preserve that join and all related existing business filters.
+
+Column-handling rules:
+
+1. Copy the exact current INSERT INTO VOL_CLM_PA column list.
+2. Make the SELECT expression count and order match exactly.
+3. Do not replace all columns with RXB columns.
+4. Claim-level fields should continue to come from CLM.
+5. RXB should provide only the PA/ICD-related fields needed for this enhancement.
+6. Do not add EVENT_ID, ACTN_TYP_CD, REC_ADD_TS, FILENAME, or RXBNFT_CAREMARK_PA_GID to VOL_CLM_PA unless those columns already exist in its schema.
+7. Do not change unrelated existing claim logic.
+
+Status update pattern:
+
+After each pass, update VOL_CLM_TYP using only the records inserted by that pass.
+
+Prefer filtering the inserted rows using the RXB source marker and pass code, for example:
+
+- SRS_SYS_NM = 'RXB'
+- TYP = '00A', '00B', or '00C'
+
+Use the actual tracking column names in this SQL.
+
+Expected final order:
+
+1. Existing setup and base daily claim load
+2. RXB Pass 1: PA number + member + dates
+3. Mark Pass 1 matches resolved
+4. RXB Pass 2: member + drug + dates
+5. Mark Pass 2 matches resolved
+6. RXB Pass 3: EPH link + drug + dates
+7. Mark Pass 3 matches resolved
+8. Continue existing normal claim-resolution logic
+9. Repeat the same three RXB passes in the second reporting iteration
+10. Continue the remaining existing process unchanged
+
+Please return:
+
+1. The full modified SQL
+2. Clear comments around each new RXB pass
+3. A short summary of exactly what was added
+4. Any assumptions you had to make
+5. A warning list for column names or lookup mappings that could not be verified from the existing file
+
+Do not silently invent table or column names. If an exact drug or member lookup field is unclear, preserve the existing project pattern and mark it with a clear TODO comment.
